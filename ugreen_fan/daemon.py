@@ -14,7 +14,7 @@ from typing import Any
 
 from .config import Config
 from .curve import next_pwm
-from .hwmon import HWMON_ROOT, Fan, SensorError, find_chip
+from .hwmon import HWMON_ROOT, Fan, SensorError, find_chip, set_all_manual
 from .readings import read_source
 
 FAILSAFE_PWM = 255
@@ -27,32 +27,39 @@ log = logging.getLogger(__name__)
 class State:
     mode: str
     reason: str | None
-    pwm: int
-    rpm: int | None
+    fans: dict[str, dict[str, Any]]  # "pwmN" -> {"fan": tachometer, "pwm": duty, "rpm": RPM or None}
     temps: dict[str, float]
     updated: float
 
 
+def fans_for(config: Config, chip: Path) -> list[Fan]:
+    return [Fan(chip, spec.pwm, spec.fan) for spec in config.fans]
+
+
 class Regulator:
-    def __init__(self, config: Config, fan: Fan, root: Path = HWMON_ROOT,
+    def __init__(self, config: Config, fans: list[Fan], root: Path = HWMON_ROOT,
                  clock: Callable[[], float] = time.time):
         self.config = config
-        self.fan = fan
+        self.fans = fans
         self.root = root
         self.clock = clock
         self.levels = {source.name: FAILSAFE_PWM for source in config.sources}
 
     def step(self) -> State:
         try:
-            temps, target = self._compute()
+            temps = self._compute()
         except SensorError as e:
             self.levels = dict.fromkeys(self.levels, FAILSAFE_PWM)
-            self.fan.set_manual(FAILSAFE_PWM)
-            return State("failsafe", str(e), FAILSAFE_PWM, self._rpm(), {}, self.clock())
-        self.fan.set_manual(target)
-        return State("normal", None, target, self._rpm(), temps, self.clock())
+            set_all_manual(self.fans, FAILSAFE_PWM)
+            duties = [FAILSAFE_PWM] * len(self.fans)
+            return State("failsafe", str(e), self._report(duties), {}, self.clock())
+        duties = [max(self.config.min_pwm, *(self.levels[name] for name in spec.sources))
+                  for spec in self.config.fans]
+        for fan, duty in zip(self.fans, duties):
+            fan.set_manual(duty)
+        return State("normal", None, self._report(duties), temps, self.clock())
 
-    def _compute(self) -> tuple[dict[str, float], int]:
+    def _compute(self) -> dict[str, float]:
         temps: dict[str, float] = {}
         levels = dict(self.levels)
         for source in self.config.sources:
@@ -64,13 +71,18 @@ class Regulator:
                                            levels[source.name], self.config.hysteresis)
             temps.update(readings)
         self.levels = levels
-        return temps, max(self.config.min_pwm, *levels.values())
+        return temps
 
-    def _rpm(self) -> int | None:
-        try:
-            return self.fan.rpm()
-        except SensorError:
-            return None
+    def _report(self, duties: list[int]) -> dict[str, dict[str, Any]]:
+        return {f"pwm{fan.pwm}": {"fan": fan.fan, "pwm": duty, "rpm": _rpm(fan)}
+                for fan, duty in zip(self.fans, duties)}
+
+
+def _rpm(fan: Fan) -> int | None:
+    try:
+        return fan.rpm()
+    except SensorError:
+        return None
 
 
 class StallGuard:
@@ -80,8 +92,8 @@ class StallGuard:
     so ExecStopPost would never run; this guard writes to the fan chip from another thread.
     """
 
-    def __init__(self, fan: Fan, limit: float, clock: Callable[[], float] = time.monotonic):
-        self.fan = fan
+    def __init__(self, fans: list[Fan], limit: float, clock: Callable[[], float] = time.monotonic):
+        self.fans = fans
         self.limit = limit
         self.clock = clock
         self.last = clock()
@@ -94,7 +106,7 @@ class StallGuard:
     def poll(self) -> bool:
         if self.tripped or self.clock() - self.last <= self.limit:
             return False
-        self.fan.set_manual(FAILSAFE_PWM)
+        set_all_manual(self.fans, FAILSAFE_PWM)
         self.tripped = True
         return True
 
@@ -103,7 +115,7 @@ def _watch_stalls(guard: StallGuard, stop: threading.Event) -> None:
     while not stop.wait(1):
         try:
             if guard.poll():
-                log.error("Control step hung for over %gs, fan forced to %d", guard.limit, FAILSAFE_PWM)
+                log.error("Control step hung for over %gs, fans forced to %d", guard.limit, FAILSAFE_PWM)
         except SensorError:
             log.exception("Stall guard could not set failsafe PWM")
 
@@ -133,16 +145,17 @@ def sd_notify(message: str) -> None:
 
 
 def run(config: Config, state_path: Path, root: Path = HWMON_ROOT) -> int:
-    fan = Fan(find_chip(config.chip, root), config.pwm, config.fan)
-    regulator = Regulator(config, fan, root)
+    fans = fans_for(config, find_chip(config.chip, root))
+    regulator = Regulator(config, fans, root)
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stop.set())
 
-    guard = StallGuard(fan, STALL_INTERVALS * config.interval)
+    guard = StallGuard(fans, STALL_INTERVALS * config.interval)
     threading.Thread(target=_watch_stalls, args=(guard, stop), daemon=True).start()
 
-    log.info("Regulating %s pwm%d every %gs", config.chip, config.pwm, config.interval)
+    log.info("Regulating %s %s every %gs", config.chip,
+             ", ".join(f"pwm{spec.pwm}" for spec in config.fans), config.interval)
     previous_mode = None
     try:
         while not stop.is_set():
@@ -150,17 +163,18 @@ def run(config: Config, state_path: Path, root: Path = HWMON_ROOT) -> int:
             guard.beat()
             if state.mode != previous_mode:
                 if state.mode == "failsafe":
-                    log.warning("Failsafe, fan at %d: %s", FAILSAFE_PWM, state.reason)
+                    log.warning("Failsafe, fans at %d: %s", FAILSAFE_PWM, state.reason)
                 else:
-                    log.info("Normal mode, pwm %d, temps %s", state.pwm, state.temps)
+                    log.info("Normal mode, pwm %s, temps %s",
+                             {name: fan["pwm"] for name, fan in state.fans.items()}, state.temps)
                 previous_mode = state.mode
             write_state(state, state_path)
             sd_notify("READY=1\nWATCHDOG=1")
             stop.wait(config.interval)
     finally:
         try:
-            fan.set_manual(FAILSAFE_PWM)
+            set_all_manual(fans, FAILSAFE_PWM)
         except SensorError:
             log.exception("Could not set failsafe PWM on exit")
-    log.info("Stopped, fan left at %d", FAILSAFE_PWM)
+    log.info("Stopped, fans left at %d", FAILSAFE_PWM)
     return 0

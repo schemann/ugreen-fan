@@ -25,12 +25,18 @@ class Source:
 
 
 @dataclass(frozen=True)
+class FanSpec:
+    pwm: int                    # pwmN that drives the fan
+    fan: int                    # fanN_input with its tachometer
+    sources: tuple[str, ...]    # names of the sources that drive it
+
+
+@dataclass(frozen=True)
 class Config:
     supported_models: tuple[str, ...]
     module_params: str
     chip: str
-    pwm: int
-    fan: int
+    fans: tuple[FanSpec, ...]
     interval: float
     hysteresis: float
     min_pwm: int
@@ -49,19 +55,27 @@ def load_config(path: Path) -> Config:
     return parse_config(data)
 
 
+def find_preset(model: str, presets: list[Path]) -> Path | None:
+    """The first preset whose supported_models lists `model`."""
+    for path in presets:
+        if model in load_config(path).supported_models:
+            return path
+    return None
+
+
 def parse_config(data: dict[str, Any]) -> Config:
     try:
+        sources = tuple(_parse_source(name, raw) for name, raw in data["sources"].items())
         config = Config(
             supported_models=tuple(str(m) for m in data["supported_models"]),
             module_params=str(data.get("module_params", "")),
             chip=str(data["chip"]),
-            pwm=int(data["pwm"]),
-            fan=int(data["fan"]),
+            fans=_parse_fans(data, tuple(s.name for s in sources)),
             interval=float(data.get("interval", 10)),
             hysteresis=float(data.get("hysteresis", 2)),
             min_pwm=int(data.get("min_pwm", 0)),
             truenas_alert=bool(data.get("truenas_alert", True)),
-            sources=tuple(_parse_source(name, raw) for name, raw in data["sources"].items()),
+            sources=sources,
         )
     except KeyError as e:
         raise ConfigError(f"missing key {e}") from e
@@ -69,6 +83,24 @@ def parse_config(data: dict[str, Any]) -> Config:
         raise ConfigError(f"invalid value: {e}") from e
     _validate(config)
     return config
+
+
+def _parse_fans(data: dict[str, Any], all_sources: tuple[str, ...]) -> tuple[FanSpec, ...]:
+    """[[fans]] tables, or the legacy top-level pwm + fan: one fan driven by every source."""
+    legacy = "pwm" in data or "fan" in data
+    if legacy and "fans" in data:
+        raise ConfigError("use either [[fans]] or the top-level pwm and fan keys, not both")
+    if legacy:
+        return (FanSpec(int(data["pwm"]), int(data["fan"]), all_sources),)
+    if "fans" not in data:
+        raise ConfigError("missing [[fans]] (or the top-level pwm and fan keys)")
+    fans = []
+    for raw in data["fans"]:
+        names = raw.get("sources", list(all_sources))
+        if not isinstance(names, list):
+            raise ConfigError(f"fans pwm{raw.get('pwm')}: sources must be a list of source names")
+        fans.append(FanSpec(int(raw["pwm"]), int(raw["fan"]), tuple(str(n) for n in names)))
+    return tuple(fans)
 
 
 def _parse_source(name: str, raw: dict[str, Any]) -> Source:
@@ -97,6 +129,23 @@ def _validate(config: Config) -> None:
         raise ConfigError("hysteresis must not be negative")
     for source in config.sources:
         _validate_source(source)
+    _validate_fans(config)
+
+
+def _validate_fans(config: Config) -> None:
+    if not config.fans:
+        raise ConfigError("at least one [[fans]] table is required")
+    names = {source.name for source in config.sources}
+    pwms = [fan.pwm for fan in config.fans]
+    for fan in config.fans:
+        prefix = f"fans pwm{fan.pwm}"
+        if not fan.sources:
+            raise ConfigError(f"{prefix}: sources is empty")
+        unknown = sorted(set(fan.sources) - names)
+        if unknown:
+            raise ConfigError(f"{prefix}: unknown sources {unknown}")
+        if pwms.count(fan.pwm) > 1:
+            raise ConfigError(f"{prefix}: the pwm channel is listed more than once")
 
 
 def _validate_source(source: Source) -> None:

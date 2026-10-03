@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 
 from tests.fakesys import FakeSysfs
-from ugreen_fan.hwmon import Fan, SensorError, drivetemp_ports, find_chip, find_hwmon, read_temp
+from ugreen_fan.hwmon import (Fan, SensorError, drivetemp_ports, find_chip, find_hwmon, read_temp,
+                              set_all_manual)
 
 
 class HwmonTest(unittest.TestCase):
@@ -84,3 +85,9 @@ class FanTest(unittest.TestCase):
         fan = Fan(self.hwmon / "missing", pwm=3, fan=3)
         with self.assertRaises(SensorError):
             fan.set_manual(255)
+
+    def test_set_all_manual_writes_the_rest_before_raising(self):
+        other = self.sys.add("it8613", {"pwm2": 51, "pwm2_enable": 2})
+        with self.assertRaises(SensorError):
+            set_all_manual([Fan(self.hwmon / "missing", 3, 3), Fan(other, 2, 2)], 255)
+        self.assertEqual((self.sys.read(other, "pwm2_enable"), self.sys.read(other, "pwm2")), ("1", "255"))

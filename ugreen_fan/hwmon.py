@@ -93,3 +93,15 @@ class Fan:
         # On ITE chips the manual duty register doubles as the auto-curve start PWM.
         self.set_manual(start_pwm)
         _write(self._enable_path, 2)
+
+
+def set_all_manual(fans: list[Fan], value: int) -> None:
+    """Write every fan even if one fails, then report the first failure."""
+    error = None
+    for fan in fans:
+        try:
+            fan.set_manual(value)
+        except SensorError as e:
+            error = error or e
+    if error:
+        raise error

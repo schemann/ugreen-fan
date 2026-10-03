@@ -8,7 +8,8 @@ REGULATED_MODES = (0, 1)
 
 
 def diagnose(*, module_loaded: bool, service_active: bool, state: dict[str, Any] | None,
-             pwm_enable: int | None, now: float, interval: float) -> str | None:
+             pwm_enable: dict[int, int | None], now: float, interval: float) -> str | None:
+    """pwm_enable maps each configured pwm channel to its pwmN_enable (None: unreadable)."""
     if not module_loaded:
         return ("it87 module is not loaded, fan is on the BIOS curve "
                 "(TrueNAS updated? run build.sh, then ugreen-fan load)")
@@ -19,9 +20,11 @@ def diagnose(*, module_loaded: bool, service_active: bool, state: dict[str, Any]
     if now - state["updated"] > STALE_INTERVALS * interval:
         return "regulator state is stale, the regulator is stuck"
     if state["mode"] != "normal":
-        return f"regulator is in failsafe, fan at full speed: {state['reason']}"
-    if pwm_enable not in REGULATED_MODES:
-        return f"pwm is not under manual control (pwm_enable={pwm_enable})"
-    if state["rpm"] == 0:
-        return "fan reports 0 RPM, check the fan"
+        return f"regulator is in failsafe, fans at full speed: {state['reason']}"
+    for pwm, enable in sorted(pwm_enable.items()):
+        if enable not in REGULATED_MODES:
+            return f"pwm{pwm} is not under manual control (pwm_enable={enable})"
+    for _, fan in sorted(state.get("fans", {}).items()):
+        if fan["rpm"] == 0:
+            return f"fan{fan['fan']} reports 0 RPM, check the fan"
     return None

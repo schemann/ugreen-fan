@@ -8,16 +8,17 @@ import sys
 import time
 from pathlib import Path
 
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, find_preset, load_config
 from .daemon import FAILSAFE_PWM, read_state, run
 from .health import diagnose
-from .hwmon import Fan, SensorError, find_chip
-from .module import STATE_FILE, SetupError, is_loaded, load, restore, service_active
+from .hwmon import Fan, SensorError, find_chip, set_all_manual
+from .module import STATE_FILE, SetupError, is_loaded, load, read_model, restore, service_active
 from .truenas import TrueNASError, clear_alert, raise_alert, register, unregister
 
 REPO = Path(__file__).resolve().parent.parent
 CONFIG = REPO / "config.toml"
-EXAMPLE = REPO / "config.example.toml"
+EXAMPLE = REPO / "config.example.toml"  # the DXP4800 preset, also the fallback
+PRESETS = REPO / "presets"
 
 log = logging.getLogger("ugreen_fan")
 
@@ -29,27 +30,42 @@ def cmd_load(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     config = load_config(CONFIG)
-    if (config.chip, config.pwm) != (args.chip, args.pwm):
-        raise ConfigError(f"config.toml now drives {config.chip} pwm{config.pwm}, but the service "
-                          f"was set up for {args.chip} pwm{args.pwm}; run 'ugreen-fan load'")
+    configured = sorted(spec.pwm for spec in config.fans)
+    if (config.chip, configured) != (args.chip, sorted(args.pwm)):
+        raise ConfigError(f"config.toml now drives {config.chip} {_channels(configured)}, but the "
+                          f"service was set up for {args.chip} {_channels(sorted(args.pwm))}; "
+                          "run 'ugreen-fan load'")
     return run(config, STATE_FILE)
 
 
+def _channels(pwms: list[int]) -> str:
+    return ", ".join(f"pwm{pwm}" for pwm in pwms)
+
+
 def cmd_failsafe(args: argparse.Namespace) -> int:
-    Fan(find_chip(args.chip), args.pwm, 0).set_manual(FAILSAFE_PWM)
+    chip = find_chip(args.chip)
+    set_all_manual([Fan(chip, pwm, 0) for pwm in args.pwm], FAILSAFE_PWM)
     return 0
 
 
-def _pwm_enable(chip: str, pwm: int) -> int | None:
+def _pwm_enable(config: Config) -> dict[int, int | None]:
+    pwms = [spec.pwm for spec in config.fans]
     try:
-        return Fan(find_chip(chip), pwm, 0).enable()
+        chip = find_chip(config.chip)
     except SensorError:
-        return None
+        return dict.fromkeys(pwms, None)
+    enable: dict[int, int | None] = {}
+    for pwm in pwms:
+        try:
+            enable[pwm] = Fan(chip, pwm, 0).enable()
+        except SensorError:
+            enable[pwm] = None
+    return enable
 
 
 def _probe_problem(config: Config) -> str | None:
     return diagnose(module_loaded=is_loaded(), service_active=service_active(),
-                    state=read_state(STATE_FILE), pwm_enable=_pwm_enable(config.chip, config.pwm),
+                    state=read_state(STATE_FILE), pwm_enable=_pwm_enable(config),
                     now=time.time(), interval=config.interval)
 
 
@@ -86,8 +102,13 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_install(args: argparse.Namespace) -> int:
     if not CONFIG.exists():
-        shutil.copyfile(EXAMPLE, CONFIG)
-        log.info("Created %s from the example", CONFIG)
+        model = read_model()
+        preset = find_preset(model, [EXAMPLE, *sorted(PRESETS.glob("*.toml"))])
+        if preset is None:
+            log.warning("No preset supports '%s'; check chip, fans and sources in %s", model, CONFIG)
+            preset = EXAMPLE
+        shutil.copyfile(preset, CONFIG)
+        log.info("Created %s from %s", CONFIG, preset.name)
     config = load_config(CONFIG)
     register(REPO)
     log.info("Registered POSTINIT script and hourly Cron Job in TrueNAS")
@@ -115,12 +136,13 @@ def build_parser() -> argparse.ArgumentParser:
         .add_argument("--force", action="store_true", help="skip the model check")
     for name, handler, help_text in (
             ("run", cmd_run, "run the regulator in the foreground (systemd)"),
-            ("failsafe", cmd_failsafe, "set the fan to full speed")):
+            ("failsafe", cmd_failsafe, "set the fans to full speed")):
         sub = add(name, handler, help_text)
         sub.add_argument("--chip", required=True)
-        sub.add_argument("--pwm", type=int, required=True)
+        sub.add_argument("--pwm", type=int, action="append", required=True,
+                         help="pwm channel, repeat for every fan")
     add("check", cmd_check, "health check for the TrueNAS Cron Job")
-    add("restore", cmd_restore, "stop regulating and hand the fan back to BIOS")
+    add("restore", cmd_restore, "stop regulating and hand the fans back to BIOS")
     add("status", cmd_status, "print the regulator state")
     add("install", cmd_install, "register in TrueNAS and start") \
         .add_argument("--force", action="store_true", help="skip the model check")
