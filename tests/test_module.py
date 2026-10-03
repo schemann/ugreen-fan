@@ -32,6 +32,10 @@ class ModuleTest(unittest.TestCase):
     def test_read_model(self):
         self.assertEqual(read_model(self.write("product_name", "DXP4800 Pro\n")), "DXP4800 Pro")
 
+    def test_unreadable_model(self):
+        with self.assertRaisesRegex(SetupError, "cannot read the model"):
+            read_model(self.dir / "missing")
+
     def test_unsupported_model(self):
         dmi = self.write("product_name", "DXP8800 Plus\n")
         with self.assertRaisesRegex(SetupError, "--force"):
@@ -92,11 +96,19 @@ class ModuleTest(unittest.TestCase):
         save_bios_pwm([Fan(chip, 2, 2), Fan(chip, 3, 3)], saved)
         self.assertEqual(json.loads(saved.read_text()), {"2": 60, "3": 51})
 
-    def test_save_bios_pwm_keeps_legacy_file(self):
-        _, chip = self.fans({"pwm2": 60, "pwm2_enable": 2, "pwm3": 70, "pwm3_enable": 2})
+    def test_save_bios_pwm_upgrades_legacy_file(self):
+        # pwm3 was regulated by the old version (manual), pwm2 is new and still on the BIOS curve
+        _, chip = self.fans({"pwm2": 60, "pwm2_enable": 2, "pwm3": 200, "pwm3_enable": 1})
         saved = self.write("bios_pwm", "51\n")
         save_bios_pwm([Fan(chip, 2, 2), Fan(chip, 3, 3)], saved)
-        self.assertEqual(saved.read_text(), "51\n")
+        self.assertEqual(json.loads(saved.read_text()), {"2": 60, "3": 51})
+
+    def test_save_bios_pwm_leaves_corrupt_file_alone(self):
+        _, chip = self.fans({"pwm2": 60, "pwm2_enable": 2})
+        saved = self.write("bios_pwm", "{")
+        with self.assertLogs("ugreen_fan.module", "WARNING"):
+            save_bios_pwm([Fan(chip, 2, 2)], saved)
+        self.assertEqual(saved.read_text(), "{")
 
     def test_read_bios_pwm(self):
         self.assertEqual(read_bios_pwm([2, 3], self.dir / "missing"), {})
@@ -104,7 +116,8 @@ class ModuleTest(unittest.TestCase):
         self.assertEqual(read_bios_pwm([2, 3], self.write("legacy", "51\n")), {2: 51, 3: 51})
 
     def test_read_bios_pwm_corrupt(self):
-        for text in ("{", "[51]", '{"2": "x"}'):
+        for text in ("{", "[51]", '{"2": "x"}', "true", '{"2": true}', '{"2": 256}', '{"2": -1}', "300",
+                     '{"x": 51}', '{"2": 51.5}'):
             with self.subTest(text), self.assertRaisesRegex(SetupError, "reboot"):
                 read_bios_pwm([2], self.write("bios_pwm", text))
 
@@ -119,27 +132,54 @@ def make_config(*pwms: int) -> Config:
 
 
 class LoadTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        tmp = Path(self.tmp.name)
+        self.repo = tmp / "repo"
+        ko = module_file(self.repo, "6.12.105-production+truenas")
+        ko.parent.mkdir(parents=True)
+        ko.write_text("")
+        self.sys = FakeSysfs(tmp / "hwmon")
+        self.chip = self.sys.add("it8613", {"pwm2": 51, "pwm2_enable": 2, "pwm3": 52, "pwm3_enable": 2})
+        self.unit, self.bios_pwm = tmp / "unit", tmp / "bios_pwm"
+        uname = mock.Mock(release="6.12.105-production+truenas")
+        for target, kwargs in ((module, dict(attribute="check_model", return_value="DXP4800 Pro")),
+                               (module.os, dict(attribute="uname", return_value=uname)),
+                               (module, dict(attribute="is_loaded", return_value=True)),
+                               (module, dict(attribute="_wait_for_chip", return_value=self.chip)),
+                               (module, dict(attribute="UNIT_PATH", new=self.unit)),
+                               (module, dict(attribute="BIOS_PWM_FILE", new=self.bios_pwm))):
+            patcher = mock.patch.object(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(module, "_run")
+        self.run = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_saves_every_fan_and_writes_unit_for_every_pwm(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp) / "repo"
-            ko = module_file(repo, "6.12.105-production+truenas")
-            ko.parent.mkdir(parents=True)
-            ko.write_text("")
-            chip = FakeSysfs(Path(tmp) / "hwmon").add(
-                "it8613", {"pwm2": 51, "pwm2_enable": 2, "pwm3": 52, "pwm3_enable": 2})
-            unit, bios_pwm = Path(tmp) / "unit", Path(tmp) / "bios_pwm"
-            uname = mock.Mock(release="6.12.105-production+truenas")
-            with mock.patch.object(module, "check_model", return_value="DXP4800 Pro"), \
-                 mock.patch.object(module.os, "uname", return_value=uname), \
-                 mock.patch.object(module, "is_loaded", return_value=True), \
-                 mock.patch.object(module, "_wait_for_chip", return_value=chip), \
-                 mock.patch.object(module, "UNIT_PATH", unit), \
-                 mock.patch.object(module, "BIOS_PWM_FILE", bios_pwm), \
-                 mock.patch.object(module, "_run") as run:
-                module.load(make_config(2, 3), repo, False)
-            self.assertEqual(json.loads(bios_pwm.read_text()), {"2": 51, "3": 52})
-            self.assertIn("run --chip it8613 --pwm 2 --pwm 3\n", unit.read_text())
-            self.assertIn(mock.call("systemctl", "restart", "ugreen-fan.service"), run.call_args_list)
+        module.load(make_config(2, 3), self.repo, False)
+        self.assertEqual(json.loads(self.bios_pwm.read_text()), {"2": 51, "3": 52})
+        self.assertIn("run --chip it8613 --pwm 2 --pwm 3\n", self.unit.read_text())
+        self.assertIn(mock.call("systemctl", "restart", "ugreen-fan.service"), self.run.call_args_list)
+
+    def test_fan_removed_from_config_is_handed_back(self):
+        self.bios_pwm.write_text('{"2": 51, "3": 52}\n')
+        for pwm in (2, 3):
+            Fan(self.chip, pwm, pwm).set_manual(200)
+        with self.assertLogs("ugreen_fan.module", "INFO") as logs:
+            module.load(make_config(3), self.repo, False)
+        self.assertEqual((self.sys.read(self.chip, "pwm2"), self.sys.read(self.chip, "pwm2_enable")), ("51", "2"))
+        self.assertEqual(self.sys.read(self.chip, "pwm3_enable"), "1")
+        self.assertEqual(json.loads(self.bios_pwm.read_text()), {"3": 52})
+        self.assertTrue(any("pwm2" in line for line in logs.output))
+
+    def test_corrupt_bios_pwm_does_not_stop_the_regulator(self):
+        self.bios_pwm.write_text("{")
+        with self.assertLogs("ugreen_fan.module", "WARNING"):
+            module.load(make_config(2, 3), self.repo, False)
+        self.assertIn(mock.call("systemctl", "restart", "ugreen-fan.service"), self.run.call_args_list)
+        self.assertEqual(self.bios_pwm.read_text(), "{")
 
 
 class RestoreTest(unittest.TestCase):
@@ -195,6 +235,22 @@ class RestoreTest(unittest.TestCase):
             restore(make_config(2, 3))
         self.run.assert_not_called()
         self.assertTrue(self.unit.exists())
+
+    def test_saved_fan_no_longer_configured_is_handed_back_too(self):
+        self.bios_pwm.write_text('{"2": 51, "3": 52}\n')
+        restore(make_config(3))
+        self.assertEqual([self.read(f) for f in ("pwm2", "pwm2_enable", "pwm3", "pwm3_enable")],
+                         ["51", "2", "52", "2"])
+        self.assertFalse(self.bios_pwm.exists())
+
+    def test_file_kept_when_a_fan_cannot_be_handed_back(self):
+        self.bios_pwm.write_text('{"2": 51, "3": 52, "4": 53}\n')
+        (self.chip / "pwm4_enable").mkdir()  # unwritable
+        with self.assertRaisesRegex(SetupError, "pwm4"):
+            restore(make_config(3))
+        self.assertTrue(self.bios_pwm.exists())
+        self.assertNotIn(mock.call("rmmod", "it87"), self.run.call_args_list)
+        self.assertEqual((self.read("pwm2_enable"), self.read("pwm3_enable")), ("2", "2"))
 
     def test_module_not_loaded_only_removes_the_unit(self):
         with mock.patch.object(module, "is_loaded", return_value=False):

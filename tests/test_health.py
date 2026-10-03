@@ -51,5 +51,12 @@ class DiagnoseTest(unittest.TestCase):
     def test_fan_stalled(self):
         self.assertEqual(check(state=with_fan("pwm3", rpm=0)), "fan3 reports 0 RPM, check the fan")
 
+    def test_legacy_state_without_fans_passes_during_upgrade(self):
+        legacy = {"mode": "normal", "reason": None, "pwm": 128, "rpm": 1000, "temps": {}, "updated": 100.0}
+        self.assertIsNone(check(state=legacy))
+
+    def test_module_message_is_plural(self):
+        self.assertIn("fans are on the BIOS curve", check(module_loaded=False))
+
     def test_unknown_rpm_is_not_a_stall(self):
         self.assertIsNone(check(state=with_fan("pwm2", rpm=None)))

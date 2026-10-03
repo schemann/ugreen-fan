@@ -145,6 +145,16 @@ class InstallCommandTest(unittest.TestCase):
         self.assertEqual(text, cli.EXAMPLE.read_text())
         self.assertTrue(any(line.startswith("WARNING") and "DXP8800 Plus" in line for line in logs))
 
+    def test_unreadable_dmi_is_a_clear_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(cli, "CONFIG", Path(tmp) / "config.toml"), \
+                 mock.patch("ugreen_fan.module.DMI_PRODUCT", Path(tmp) / "missing"), \
+                 mock.patch.object(cli, "register") as register, \
+                 self.assertLogs("ugreen_fan", "ERROR") as logs:
+                self.assertEqual(cli.main(["install"]), 1)
+            register.assert_not_called()
+            self.assertIn("cannot read the model", logs.output[0])
+
     def test_existing_config_is_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "config.toml"

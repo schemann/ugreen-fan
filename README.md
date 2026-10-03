@@ -4,9 +4,9 @@ Fan control for the **UGREEN DXP4800** and **DXP4800 Pro** running **TrueNAS SCA
 driven by **hard-drive temperature** (with the CPU, and on the Pro the RAM and the
 boot NVMe, as safety nets).
 
-Out of the box the fan is run by the BIOS curve inside the Super-I/O chip, and that
-curve follows only the CPU temperature. The disks — the thing you actually care
-about in a NAS — are ignored. ugreen-fan takes the fan over from the OS and
+Out of the box the fans are run by the BIOS curve inside the Super-I/O chip, and that
+curve follows only the CPU temperature. The disks, the thing you actually care
+about in a NAS, are ignored. ugreen-fan takes the fans over from the OS and
 regulates it by the hottest drive, with a hard failsafe to full speed.
 
 > [!WARNING]
@@ -37,7 +37,9 @@ regulates it by the hottest drive, with a hard failsafe to full speed.
   x86-64 Docker host reachable over SSH. The NAS ships the `docker` CLI even without
   Apps, and `build.sh` uses no bind mounts (headers go in and the module comes out
   through the docker stream), so `DOCKER_HOST=ssh://user@buildhost` works. The build
-  host needs internet access.
+  host needs internet access. The container is pinned to `linux/amd64` (TrueNAS SCALE
+  is amd64 only, and the module's vermagic does not record the architecture), so an
+  arm64 build host needs amd64 emulation; `build.sh` refuses to run on a non-x86_64 NAS.
 - SSH access with sudo
 
 ## Install
@@ -117,12 +119,12 @@ The DXP4800 Pro preset drives both fans by the same disks and cpu sources plus t
 more:
 
 - **ram** (`spd5118`, the DDR5 sensor, one hwmon per module; 50 °C → 51 … 70 °C →
-  255). The SO-DIMMs sit stacked and get little airflow: under load the RAM went from
-  59 to 80 °C in 10 minutes and froze the box while the CPU and disk curves kept the
-  fans slow.
-- **nvme** (`nvme`, `temp1` = "Composite" of the boot NVMe, critical at 94.85 °C;
-  50 °C → 51 … 75 °C → 255), `optional = true` so a box without an NVMe drive runs
-  normally.
+  255). The SO-DIMMs sit stacked: under Memtest the RAM went from 59 to 80 °C in 10
+  minutes and the box froze, twice. That is why the RAM drives the fans directly.
+- **nvme** (`nvme`, `temp1` = "Composite" of the boot NVMe; 50 °C → 51 … 75 °C →
+  255), `optional = true` so a box without an NVMe drive runs normally. The measured
+  drive (TWSC TSC3AN128) reports `temp1_crit` 94.85 °C; other drives differ, so check
+  yours and adjust the curve.
 
 A source has these keys:
 
@@ -151,7 +153,7 @@ Every failure ends at **PWM 255, manual mode**:
 | process hangs | systemd watchdog kills it → `ExecStopPost` |
 | a step is stuck in the kernel (e.g. a failing disk), unkillable | a guard thread inside the regulator, after 2 × `interval` |
 | **whole OS hangs** | **not covered** — the chip keeps the last value, it has no PWM watchdog |
-| module not loaded at boot | fan stays on the BIOS curve; `check` alerts you |
+| module not loaded at boot | the fans stay on the BIOS curve; `check` alerts you |
 
 `run` and `ExecStopPost` get the chip and every PWM channel on their command line,
 so the failsafe works even if `config.toml` is broken, and the regulator refuses to
@@ -165,10 +167,15 @@ ExecStopPost="/mnt/<pool>/apps/ugreen-fan/bin/ugreen-fan" failsafe --chip it8613
 
 `load` saves the BIOS start PWM of every fan still on the BIOS curve to
 `/run/ugreen-fan/bios_pwm` (JSON, e.g. `{"2": 51, "3": 51}`; an entry is never
-overwritten). `restore` hands every configured fan back with its saved value, and
-refuses before changing anything if one is missing (reboot to let the BIOS
-re-initialise the fan controller). A file from an older version holding a single
-number applies to every fan.
+overwritten). A fan whose `[[fans]]` table was removed is handed back to the BIOS
+curve with its saved value by the next `load` and dropped from the file. `restore`
+hands every configured or saved fan back, and refuses before changing anything if a
+configured fan has no saved value (reboot to let the BIOS re-initialise the fan
+controller); if a fan cannot be written, the file and the module stay so you can
+retry. A file from an older version holding a single number is rewritten as JSON on
+the next `load`: fans still on the BIOS curve get their real start PWM, the others
+keep the old number. A corrupt file is left untouched (the regulator still starts,
+`restore` refuses with the reboot advice).
 
 ## Alerts
 
@@ -194,7 +201,7 @@ Set `truenas_alert = false` to disable the bell alert and keep only the Cron Job
 
 A new TrueNAS release usually ships a new kernel, and the module has to be rebuilt:
 
-1. Update and reboot. The fan runs on the BIOS curve; the Cron Job alerts you within
+1. Update and reboot. The fans run on the BIOS curve; the Cron Job alerts you within
    an hour.
 2. `cd /mnt/<pool>/apps/ugreen-fan && sudo ./build.sh && sudo bin/ugreen-fan load`
    (with a remote build host: `sudo DOCKER_HOST=ssh://user@buildhost ./build.sh`).

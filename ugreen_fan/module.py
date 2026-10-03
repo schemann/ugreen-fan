@@ -27,11 +27,15 @@ class SetupError(Exception):
     pass
 
 
-def read_model(dmi_path: Path = DMI_PRODUCT) -> str:
-    return dmi_path.read_text().strip()
+def read_model(dmi_path: Path | None = None) -> str:
+    path = dmi_path or DMI_PRODUCT
+    try:
+        return path.read_text().strip()
+    except OSError as e:
+        raise SetupError(f"cannot read the model from {path}: {e}") from e
 
 
-def check_model(supported: tuple[str, ...], force: bool, dmi_path: Path = DMI_PRODUCT) -> str:
+def check_model(supported: tuple[str, ...], force: bool, dmi_path: Path | None = None) -> str:
     model = read_model(dmi_path)
     if model not in supported and not force:
         raise SetupError(f"model '{model}' is not in supported_models {list(supported)}; "
@@ -72,29 +76,87 @@ def unit_text(repo: Path, chip: str, pwms: list[int]) -> str:
     )
 
 
-def read_bios_pwm(pwms: list[int], path: Path = BIOS_PWM_FILE) -> dict[int, int]:
-    """pwm channel -> BIOS start PWM. A legacy file holds one number for every fan."""
+def _duty(value: object) -> int:
+    # bool is an int subclass: JSON true/false is not a duty
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
+        raise ValueError(f"{value!r} is not a PWM duty")
+    return value
+
+
+def _parse_bios_pwm(path: Path) -> int | dict[int, int] | None:
+    """None: no file; int: legacy file (one start PWM for every fan); else pwm channel -> start PWM."""
     if not path.exists():
-        return {}
+        return None
     try:
         data = json.loads(path.read_text())
-        if isinstance(data, int):
-            return dict.fromkeys(pwms, data)
-        return {int(pwm): int(duty) for pwm, duty in data.items()}
-    except (ValueError, TypeError, AttributeError) as e:
+        if not isinstance(data, dict):
+            return _duty(data)
+        return {int(pwm): _duty(duty) for pwm, duty in data.items()}
+    except (OSError, ValueError) as e:
         raise SetupError(f"{path} is corrupt ({e}); reboot to let the BIOS "
                          "re-initialise the fan controller") from e
 
 
-def save_bios_pwm(fans: list[Fan], path: Path = BIOS_PWM_FILE) -> None:
-    """Remember the start PWM of every fan still on the BIOS curve; never overwrite one."""
-    saved = read_bios_pwm([fan.pwm for fan in fans], path)
-    new = {fan.pwm: fan.duty() for fan in fans if fan.pwm not in saved and fan.enable() == 2}
-    if not new:
-        return
-    saved.update(new)
+def read_bios_pwm(pwms: list[int], path: Path = BIOS_PWM_FILE) -> dict[int, int]:
+    """pwm channel -> BIOS start PWM. A legacy file holds one number for every fan."""
+    data = _parse_bios_pwm(path)
+    if isinstance(data, int):
+        return dict.fromkeys(pwms, data)
+    return data or {}
+
+
+def _write_bios_pwm(saved: dict[int, int], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({str(pwm): saved[pwm] for pwm in sorted(saved)}) + "\n")
+
+
+def save_bios_pwm(fans: list[Fan], path: Path = BIOS_PWM_FILE) -> None:
+    """Remember the start PWM of every fan still on the BIOS curve; never overwrite one.
+
+    A corrupt file is left alone (restore then refuses with the reboot advice), so the
+    regulator still starts. A legacy single-number file is rewritten as JSON: fans still
+    on the BIOS curve get their real start PWM, the others keep the legacy value.
+    """
+    try:
+        data = _parse_bios_pwm(path)
+    except SetupError as e:
+        log.warning("%s", e)
+        return
+    if isinstance(data, int):
+        _write_bios_pwm({fan.pwm: fan.duty() if fan.enable() == 2 else data for fan in fans}, path)
+        return
+    saved = data or {}
+    new = {fan.pwm: fan.duty() for fan in fans if fan.pwm not in saved and fan.enable() == 2}
+    if new:
+        _write_bios_pwm(saved | new, path)
+
+
+def release_unconfigured(chip: Path, config: Config, path: Path = BIOS_PWM_FILE) -> None:
+    """Hand fans that were saved but are no longer configured back to the BIOS curve.
+
+    Otherwise a [[fans]] table removed from config.toml leaves its fan in manual mode
+    at the last duty, with nothing regulating it.
+    """
+    try:
+        data = _parse_bios_pwm(path)
+    except SetupError as e:
+        log.warning("%s", e)
+        return
+    if not isinstance(data, dict):
+        return
+    configured = {spec.pwm for spec in config.fans}
+    released = {}
+    for pwm in sorted(set(data) - configured):
+        try:
+            Fan(chip, pwm, 0).set_auto(data[pwm])
+        except SensorError as e:
+            log.error("Could not hand pwm%d back to BIOS: %s", pwm, e)
+            continue
+        released[pwm] = data.pop(pwm)
+    if released:
+        _write_bios_pwm(data, path)
+        log.info("pwm%s no longer configured, returned to BIOS control (start PWM %s)",
+                 ", pwm".join(map(str, released)), ", ".join(map(str, released.values())))
 
 
 def _output(*args: str) -> str:
@@ -141,19 +203,24 @@ def load(config: Config, repo: Path, force: bool) -> None:
     _run("systemctl", "daemon-reload")
     _run("systemctl", "restart", UNIT_NAME)
     log.info("Started %s", UNIT_NAME)
+    # after the restart: the old unit's ExecStopPost may still name the removed channel
+    release_unconfigured(chip, config, BIOS_PWM_FILE)
 
 
 def restore(config: Config) -> None:
     loaded = is_loaded()
-    pwms = [spec.pwm for spec in config.fans]
+    configured = [spec.pwm for spec in config.fans]
+    pwms = configured
     bios_pwm: dict[int, int] = {}
     if loaded:
         # check before changing anything: without a start PWM a fan cannot be handed back
         if not BIOS_PWM_FILE.exists():
             raise SetupError(f"{BIOS_PWM_FILE} is missing, cannot restore the BIOS curve; "
                              "reboot to let the BIOS re-initialise the fan controller")
-        bios_pwm = read_bios_pwm(pwms, BIOS_PWM_FILE)
-        missing = [f"pwm{pwm}" for pwm in pwms if pwm not in bios_pwm]
+        bios_pwm = read_bios_pwm(configured, BIOS_PWM_FILE)
+        # saved fans that are no longer configured go back as well
+        pwms = sorted(set(configured) | set(bios_pwm))
+        missing = [f"pwm{pwm}" for pwm in configured if pwm not in bios_pwm]
         if missing:
             raise SetupError(f"{BIOS_PWM_FILE} has no start PWM for {', '.join(missing)}, cannot "
                              "restore the BIOS curve; reboot to let the BIOS re-initialise the fan controller")
@@ -164,10 +231,17 @@ def restore(config: Config) -> None:
     if loaded:
         try:
             chip = find_chip(config.chip)
-            for spec in config.fans:
-                Fan(chip, spec.pwm, spec.fan).set_auto(bios_pwm[spec.pwm])
         except SensorError as e:
             raise SetupError(f"could not hand the fans back to BIOS: {e}") from e
+        failed = []
+        for pwm in pwms:
+            try:
+                Fan(chip, pwm, 0).set_auto(bios_pwm[pwm])
+            except SensorError as e:
+                failed.append(f"pwm{pwm}: {e}")
+        if failed:
+            # keep the file and the module: the start PWM is the only way back without a reboot
+            raise SetupError(f"could not hand the fans back to BIOS: {'; '.join(failed)}")
         _run("rmmod", MODULE)
         BIOS_PWM_FILE.unlink()
         log.info("Fans returned to BIOS control (start PWM %s), %s unloaded",

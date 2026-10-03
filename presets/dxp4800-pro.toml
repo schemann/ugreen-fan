@@ -32,8 +32,8 @@ channel = 1
 valid = [1, 110]
 curve = [[60, 51], [75, 128], [90, 255]]
 
-# The stacked SO-DIMM slots run hot: under load the RAM went from 59 to 80 °C in
-# 10 minutes and froze the box while the CPU and disk curves still idled the fans.
+# The stacked SO-DIMM slots run hot: under Memtest the RAM went from 59 to 80 °C in
+# 10 minutes and the box froze, twice. That is why the RAM drives the fans directly.
 [sources.ram]
 driver = "spd5118"                      # DDR5 SPD hub sensor, one hwmon per module (1 or 2)
 channel = 1
@@ -41,7 +41,9 @@ valid = [1, 100]
 curve = [[50, 51], [55, 90], [60, 140], [65, 200], [70, 255]]
 
 [sources.nvme]
-driver = "nvme"                         # temp1 = "Composite" of the NVMe drive (crit 94.85 °C)
+driver = "nvme"                         # temp1 = "Composite" of the NVMe drive
+# Measured drive: TWSC TSC3AN128, temp1_crit 94.85 °C. Other drives have other limits:
+# check /sys/class/hwmon/hwmon*/temp1_crit (name "nvme") and adjust the curve.
 channel = 1
 optional = true                         # no NVMe fitted: the source adds nothing
 valid = [1, 100]

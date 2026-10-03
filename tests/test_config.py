@@ -126,6 +126,14 @@ class FansTest(unittest.TestCase):
     def test_duplicate_pwm(self):
         self.assert_invalid(with_fans({"pwm": 2, "fan": 2}, {"pwm": 2, "fan": 3}), "more than once")
 
+    def test_fans_as_single_table(self):
+        data = with_fans()
+        data["fans"] = {"pwm": 2, "fan": 2}
+        self.assert_invalid(data, r"fans must be an array of tables: use \[\[fans\]\]")
+
+    def test_fans_entry_not_a_table(self):
+        self.assert_invalid(with_fans({"pwm": 2, "fan": 2}, 3), r"fans must be an array of tables: use \[\[fans\]\]")
+
     def test_fan_needs_tachometer(self):
         self.assert_invalid(with_fans({"pwm": 2}), "missing key 'fan'")
 

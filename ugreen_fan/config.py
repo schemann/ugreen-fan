@@ -94,6 +94,8 @@ def _parse_fans(data: dict[str, Any], all_sources: tuple[str, ...]) -> tuple[Fan
         return (FanSpec(int(data["pwm"]), int(data["fan"]), all_sources),)
     if "fans" not in data:
         raise ConfigError("missing [[fans]] (or the top-level pwm and fan keys)")
+    if not isinstance(data["fans"], list) or not all(isinstance(raw, dict) for raw in data["fans"]):
+        raise ConfigError("fans must be an array of tables: use [[fans]]")
     fans = []
     for raw in data["fans"]:
         names = raw.get("sources", list(all_sources))

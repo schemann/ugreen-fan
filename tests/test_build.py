@@ -1,3 +1,4 @@
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -24,8 +25,15 @@ class BuildScriptTest(unittest.TestCase):
         self.assertIn("cat /src/it87.ko >&3", self.text)
 
     def test_vermagic_rechecked_on_the_host_before_install(self):
-        host = self.text.split("' >\"$tmp\"", 1)[1]
-        self.assertLess(host.index('modinfo -F vermagic "$tmp"'), host.index('mv "$tmp" "$out/it87.ko"'))
+        check = re.search(r'^\S.*modinfo\s+-F\s+vermagic\s+"\$tmp"', self.text, re.M)  # unindented: host side
+        install = re.search(r'^\s*mv\s+"\$tmp"\s+"\$out/it87\.ko"', self.text, re.M)
+        self.assertIsNotNone(check)
+        self.assertIsNotNone(install)
+        self.assertLess(check.start(), install.start())
+
+    def test_builds_for_amd64_only(self):
+        self.assertRegex(self.text, r"docker run[^\n]*--platform linux/amd64")
+        self.assertRegex(self.text, r"arch=\$\(uname -m\)\n\[\[ \$arch == x86_64 \]\] \|\| \{")
 
     def test_temp_file_removed_on_failure(self):
         self.assertIn("set -euo pipefail", self.text)

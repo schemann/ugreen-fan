@@ -147,6 +147,18 @@ class MultiFanRegulatorTest(unittest.TestCase):
         state = self.regulator(FanSpec(2, 2, ("disks", "cpu")), FanSpec(3, 3, ("disks",))).step()
         self.assertEqual((duty(state, 2), duty(state, 3)), (170, 170))
 
+    def test_fans_sharing_a_source_share_its_hysteresis(self):
+        regulator = self.regulator(FanSpec(2, 2, ("disks",)), FanSpec(3, 3, ("disks", "cpu")))
+        regulator.step()                                   # disks 170 for both
+        (self.sda / "temp1_input").write_text("45000\n")
+        state = regulator.step()                           # held by hysteresis, once
+        self.assertEqual(regulator.levels["disks"], 170)
+        self.assertEqual((duty(state, 2), duty(state, 3)), (170, 170))
+        (self.sda / "temp1_input").write_text("42000\n")
+        state = regulator.step()
+        self.assertEqual(duty(state, 2), 140)
+        self.assertEqual(duty(state, 3), 167)              # cpu (75) now wins
+
     def test_min_pwm_applies_per_fan(self):
         self.set_cpu(30)
         regulator = self.regulator(FanSpec(2, 2, ("cpu",)), FanSpec(3, 3, ("disks",)))

@@ -11,7 +11,7 @@ def diagnose(*, module_loaded: bool, service_active: bool, state: dict[str, Any]
              pwm_enable: dict[int, int | None], now: float, interval: float) -> str | None:
     """pwm_enable maps each configured pwm channel to its pwmN_enable (None: unreadable)."""
     if not module_loaded:
-        return ("it87 module is not loaded, fan is on the BIOS curve "
+        return ("it87 module is not loaded, fans are on the BIOS curve "
                 "(TrueNAS updated? run build.sh, then ugreen-fan load)")
     if not service_active:
         return "ugreen-fan service is not running"
