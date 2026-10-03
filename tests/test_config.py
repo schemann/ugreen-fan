@@ -24,6 +24,7 @@ class ParseConfigTest(unittest.TestCase):
         self.assertEqual(disks.channel, 1)
         self.assertEqual(disks.curve[0], (42.0, 60))
         self.assertEqual(disks.valid, (1.0, 80.0))
+        self.assertFalse(disks.optional)
 
     def assert_invalid(self, mutate):
         data = copy.deepcopy(example())
@@ -57,6 +58,14 @@ class ParseConfigTest(unittest.TestCase):
 
     def test_interval_must_fit_watchdog(self):
         self.assert_invalid(lambda d: d.update(interval=11))
+
+    def test_optional_source(self):
+        data = copy.deepcopy(example())
+        data["sources"]["cpu"]["optional"] = True
+        self.assertTrue(parse_config(data).sources[1].optional)
+
+    def test_optional_must_be_bool(self):
+        self.assert_invalid(lambda d: d["sources"]["cpu"].update(optional="yes"))
 
     def test_wrong_type(self):
         self.assert_invalid(lambda d: d.update(pwm="three"))

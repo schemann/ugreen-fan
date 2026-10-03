@@ -15,6 +15,10 @@ def disks() -> Source:
     return Source("disks", "drivetemp", 1, (1.0, 80.0), CURVE)
 
 
+def ram() -> Source:
+    return Source("ram", "spd5118", 1, (1.0, 100.0), CURVE)
+
+
 class ReadSourceTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -67,5 +71,42 @@ class ReadSourceTest(unittest.TestCase):
 
     def test_chip_missing(self):
         source = Source("cpu", "it8613", 1, (1.0, 110.0), CURVE)
-        with self.assertRaises(SensorError):
+        with self.assertRaisesRegex(SensorError, "no hwmon named 'it8613'"):
             read_source(source, self.root)
+
+    def test_missing_optional_source_contributes_nothing(self):
+        source = Source("nvme", "nvme", 1, (1.0, 100.0), CURVE, optional=True)
+        self.assertEqual(read_source(source, self.root), {})
+
+    def test_present_optional_source_is_read(self):
+        self.sys.add("nvme", {"temp1_input": 41850}, device="nvme0")
+        source = Source("nvme", "nvme", 1, (1.0, 100.0), CURVE, optional=True)
+        self.assertEqual(read_source(source, self.root), {"nvme/temp1": 41.85})
+
+    def test_single_instance_keeps_plain_label(self):
+        self.sys.add("spd5118", {"temp1_input": 59000}, device="0-0050")
+        self.assertEqual(read_source(ram(), self.root), {"spd5118/temp1": 59.0})
+
+    def test_every_instance_labelled_by_device(self):
+        self.sys.add("spd5118", {"temp1_input": 61000}, device="0-0052", index=5)
+        self.sys.add("spd5118", {"temp1_input": 59000}, device="0-0050", index=4)
+        self.assertEqual(read_source(ram(), self.root),
+                         {"spd5118@0-0050/temp1": 59.0, "spd5118@0-0052/temp1": 61.0})
+
+    def test_instance_without_device_link_labelled_by_hwmon(self):
+        self.sys.add("spd5118", {"temp1_input": 59000}, index=4)
+        self.sys.add("spd5118", {"temp1_input": 61000}, device="0-0052", index=5)
+        self.assertEqual(read_source(ram(), self.root),
+                         {"spd5118@hwmon4/temp1": 59.0, "spd5118@0-0052/temp1": 61.0})
+
+    def test_every_instance_checked_against_valid(self):
+        self.sys.add("spd5118", {"temp1_input": 59000}, device="0-0050")
+        self.sys.add("spd5118", {"temp1_input": 0}, device="0-0052")
+        with self.assertRaisesRegex(SensorError, r"spd5118@0-0052/temp1: 0.0 .* outside valid range"):
+            read_source(ram(), self.root)
+
+    def test_unreadable_instance_is_an_error(self):
+        self.sys.add("spd5118", {"temp1_input": 59000}, device="0-0050")
+        self.sys.add("spd5118", device="0-0052")
+        with self.assertRaises(SensorError):
+            read_source(ram(), self.root)

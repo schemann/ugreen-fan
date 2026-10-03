@@ -21,6 +21,7 @@ class Source:
     channel: int
     valid: tuple[float, float]
     curve: Curve
+    optional: bool = False  # no hwmon of this driver is fine (hardware that may not be fitted)
 
 
 @dataclass(frozen=True)
@@ -72,12 +73,16 @@ def parse_config(data: dict[str, Any]) -> Config:
 
 def _parse_source(name: str, raw: dict[str, Any]) -> Source:
     low, high = raw["valid"]
+    optional = raw.get("optional", False)
+    if not isinstance(optional, bool):
+        raise ConfigError(f"sources.{name}: optional must be true or false")
     return Source(
         name=name,
         driver=str(raw["driver"]),
         channel=int(raw.get("channel", 1)),
         valid=(float(low), float(high)),
         curve=tuple((float(t), int(p)) for t, p in raw["curve"]),
+        optional=optional,
     )
 
 

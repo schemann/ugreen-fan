@@ -82,6 +82,21 @@ with all bays empty it adds nothing and the CPU curve drives the fan) and **cpu*
 60 °C → 51 … 90 °C → 255). The CPU source exists because this is the only fan in the
 case: driving it by the disks alone would leave the CPU uncooled under load.
 
+A source has these keys:
+
+| Key | Meaning |
+|---|---|
+| `driver` | hwmon name to read; `drivetemp` means every SATA drive in the bays |
+| `channel` | `tempN_input` to read (default 1) |
+| `valid` | `[low, high]`; a reading outside it sends the fan to failsafe |
+| `curve` | `[temperature, pwm]` points |
+| `optional` | `true`: no hwmon of this driver is fine, the source then adds nothing (default `false`, which treats a missing sensor as a failure) |
+
+Every hwmon with the driver's name is read, sorted, and each reading is checked
+against `valid`. One instance is labelled `{driver}/temp{channel}` (`it8613/temp1`);
+several, such as one `spd5118` per DDR5 module, are labelled by their device:
+`spd5118@0-0050/temp1`, `spd5118@0-0051/temp1`.
+
 ## Failsafe
 
 Every failure ends at **PWM 255, manual mode**:
