@@ -29,8 +29,11 @@ regulates it by the hottest drive, with a hard failsafe to full speed.
 ## Requirements
 
 - UGREEN DXP4800 with TrueNAS SCALE
-- Docker available on the NAS (an apps pool configured) and internet access for the
-  first build
+- Docker for the build: either on the NAS itself (an apps pool configured), or any
+  x86-64 Docker host reachable over SSH. The NAS ships the `docker` CLI even without
+  Apps, and `build.sh` uses no bind mounts (headers go in and the module comes out
+  through the docker stream), so `DOCKER_HOST=ssh://user@buildhost` works. The build
+  host needs internet access.
 - SSH access with sudo
 
 ## Install
@@ -39,6 +42,8 @@ regulates it by the hottest drive, with a hard failsafe to full speed.
 sudo git clone https://github.com/tarasverq/ugreen-fan /mnt/<pool>/apps/ugreen-fan
 cd /mnt/<pool>/apps/ugreen-fan
 sudo ./build.sh              # builds modules/<kernel>/it87.ko in a Debian container
+# or, without Apps on the NAS (root's SSH key must be authorised on the build host):
+# sudo DOCKER_HOST=ssh://user@buildhost ./build.sh
 sudo bin/ugreen-fan install  # creates config.toml, registers Init script + Cron Job, starts
 sensors it8613-isa-0a30
 bin/ugreen-fan status
@@ -122,6 +127,9 @@ A new TrueNAS release usually ships a new kernel, and the module has to be rebui
 1. Update and reboot. The fan runs on the BIOS curve; the Cron Job alerts you within
    an hour.
 2. `cd /mnt/<pool>/apps/ugreen-fan && sudo ./build.sh && sudo bin/ugreen-fan load`
+   (with a remote build host: `sudo DOCKER_HOST=ssh://user@buildhost ./build.sh`).
+   The module is built against the NAS's own `/usr/src` headers and its vermagic is
+   checked in the container and again on the NAS before it lands in `modules/`.
 
 Modules are kept per kernel in `modules/<kernel>/`, so booting an older boot
 environment keeps working.
