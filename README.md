@@ -267,7 +267,11 @@ Pull requests with verified presets (`presets/<model>.toml`) are welcome.
 
 ```sh
 python3 -m unittest discover -s tests -t .
+bash -n build.sh && shellcheck build.sh bin/ugreen-fan
 ```
+
+GitHub Actions (`.github/workflows/tests.yml`) runs the same on every push and pull
+request, with Python 3.11 (what TrueNAS 25.10 ships), 3.12 and 3.13.
 
 Python 3.11 standard library only — TrueNAS has no pip.
 
