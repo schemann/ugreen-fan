@@ -29,6 +29,7 @@ class FanSpec:
     pwm: int                    # pwmN that drives the fan
     fan: int                    # fanN_input with its tachometer
     sources: tuple[str, ...]    # names of the sources that drive it
+    min_pwm: int | None = None  # per-fan floor, overrides the global min_pwm
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,9 @@ def _parse_fans(data: dict[str, Any], all_sources: tuple[str, ...]) -> tuple[Fan
         names = raw.get("sources", list(all_sources))
         if not isinstance(names, list):
             raise ConfigError(f"fans pwm{raw.get('pwm')}: sources must be a list of source names")
-        fans.append(FanSpec(int(raw["pwm"]), int(raw["fan"]), tuple(str(n) for n in names)))
+        min_pwm = raw.get("min_pwm")
+        fans.append(FanSpec(int(raw["pwm"]), int(raw["fan"]), tuple(str(n) for n in names),
+                            None if min_pwm is None else int(min_pwm)))
     return tuple(fans)
 
 
@@ -148,6 +151,8 @@ def _validate_fans(config: Config) -> None:
             raise ConfigError(f"{prefix}: unknown sources {unknown}")
         if pwms.count(fan.pwm) > 1:
             raise ConfigError(f"{prefix}: the pwm channel is listed more than once")
+        if fan.min_pwm is not None and not 0 <= fan.min_pwm <= 255:
+            raise ConfigError(f"{prefix}: min_pwm must be within 0..255")
 
 
 def _validate_source(source: Source) -> None:

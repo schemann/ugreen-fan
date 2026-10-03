@@ -96,6 +96,13 @@ class FansTest(unittest.TestCase):
         config = parse_config(with_fans({"pwm": 2, "fan": 2, "sources": ["cpu"]}, {"pwm": 3, "fan": 3}))
         self.assertEqual(config.fans[0], FanSpec(2, 2, ("cpu",)))
 
+    def test_fan_min_pwm(self):
+        config = parse_config(with_fans({"pwm": 2, "fan": 2}, {"pwm": 3, "fan": 3, "min_pwm": 105}))
+        self.assertEqual([fan.min_pwm for fan in config.fans], [None, 105])
+
+    def test_fan_min_pwm_range(self):
+        self.assert_invalid(with_fans({"pwm": 2, "fan": 2, "min_pwm": 256}), "min_pwm must be within 0..255")
+
     def test_both_forms(self):
         data = with_fans({"pwm": 2, "fan": 2})
         data["pwm"] = 3
@@ -160,7 +167,7 @@ class PresetTest(unittest.TestCase):
         self.assertEqual((config.supported_models, config.chip, config.module_params),
                          (("DXP4800 Pro",), "it8613", "ignore_resource_conflict=1"))
         every = ("disks", "cpu", "ram", "nvme")
-        self.assertEqual(config.fans, (FanSpec(2, 2, every), FanSpec(3, 3, every)))
+        self.assertEqual(config.fans, (FanSpec(2, 2, every, 51), FanSpec(3, 3, every, 105)))
         self.assertEqual((config.interval, config.hysteresis, config.min_pwm, config.truenas_alert),
                          (10, 2, 51, True))
         sources = {s.name: s for s in config.sources}

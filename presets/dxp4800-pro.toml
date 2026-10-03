@@ -9,17 +9,22 @@ hysteresis = 2                          # fall only after cooling by this much
 min_pwm = 51                            # never go below: the fans must keep spinning
 truenas_alert = true                    # bell alert on problems (see README)
 
-# The Pro has two fans, both on the BIOS curve at PWM 51 after boot (measured):
-# pwm2 -> fan2, ~840 RPM at 51, ~3375 RPM at 255
-# pwm3 -> fan3, ~845 RPM at 51, ~1646 RPM at 255
+# The Pro has two fans. After boot the BIOS runs both at ~840 RPM (start PWM 51 in
+# auto mode). In manual mode the same duty gives very different speeds (measured):
+#   PWM    60    80   100   120   140   255
+#   fan2 1022  1352  1666  1928  2184  3375 RPM
+#   fan3  508   655   813   942  1068  1646 RPM
+# The per-fan min_pwm keeps both at least at the BIOS idle speed.
 # Without `sources` a fan follows every source.
 [[fans]]
 pwm = 2                                 # pwmN that drives the fan
 fan = 2                                 # fanN_input with its tachometer
+min_pwm = 51                            # ~843 RPM (measured)
 
 [[fans]]
 pwm = 3
 fan = 3
+min_pwm = 105                           # ~851 RPM (measured), the BIOS idle speed
 
 [sources.disks]
 driver = "drivetemp"                    # every SATA drive in the bays; USB disks and NVMe are skipped

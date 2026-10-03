@@ -75,11 +75,11 @@ If no preset matches, it copies `config.example.toml` and logs a warning; check
 | `supported_models` | DMI product names allowed to load the module |
 | `module_params` | parameters for `insmod` |
 | `chip` | hwmon name of the fan controller |
-| `[[fans]]` | one table per fan: `pwm` (PWM channel), `fan` (tachometer), optional `sources` (source names driving it, default all) |
+| `[[fans]]` | one table per fan: `pwm` (PWM channel), `fan` (tachometer), optional `sources` (source names driving it, default all) and optional `min_pwm` (overrides the global floor for this fan) |
 | `pwm`, `fan` | legacy form: one fan driven by every source, instead of `[[fans]]` |
 | `interval` | seconds between control steps (max 10, the watchdog is 30 s) |
 | `hysteresis` | °C the temperature must drop before the fan slows down |
-| `min_pwm` | lowest PWM ever written, keeps the fan spinning |
+| `min_pwm` | lowest PWM ever written, keeps the fans spinning; a fan's own `min_pwm` overrides it |
 | `truenas_alert` | raise a bell alert on problems (see [Alerts](#alerts)) |
 | `[sources.*]` | temperature inputs, each with its own `curve` and `valid` range |
 

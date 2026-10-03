@@ -166,6 +166,19 @@ class MultiFanRegulatorTest(unittest.TestCase):
         state = regulator.step()
         self.assertEqual((duty(state, 2), duty(state, 3)), (51, 170))
 
+    def test_fan_min_pwm_overrides_the_global_floor(self):
+        self.set_cpu(30)
+        (self.sda / "temp1_input").write_text("30000\n")
+        regulator = self.regulator(FanSpec(2, 2, ("cpu",)), FanSpec(3, 3, ("disks",), min_pwm=105))
+        regulator.step()
+        state = regulator.step()
+        self.assertEqual((duty(state, 2), duty(state, 3)), (51, 105))  # global 51, own 105
+
+    def test_fan_min_pwm_never_caps_a_hotter_level(self):
+        regulator = self.regulator(FanSpec(2, 2, ("cpu",), min_pwm=105), FanSpec(3, 3, ("disks",)))
+        state = regulator.step()
+        self.assertEqual(duty(state, 2), 167)                           # cpu: curve(75 + 2) > 105
+
     def test_sensor_error_sends_every_fan_to_failsafe(self):
         regulator = self.regulator(FanSpec(2, 2, ("cpu",)), FanSpec(3, 3, ("disks",)))
         regulator.step()

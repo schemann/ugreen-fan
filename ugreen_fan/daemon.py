@@ -53,7 +53,8 @@ class Regulator:
             set_all_manual(self.fans, FAILSAFE_PWM)
             duties = [FAILSAFE_PWM] * len(self.fans)
             return State("failsafe", str(e), self._report(duties), {}, self.clock())
-        duties = [max(self.config.min_pwm, *(self.levels[name] for name in spec.sources))
+        duties = [max(self.config.min_pwm if spec.min_pwm is None else spec.min_pwm,
+                      *(self.levels[name] for name in spec.sources))
                   for spec in self.config.fans]
         for fan, duty in zip(self.fans, duties):
             fan.set_manual(duty)
