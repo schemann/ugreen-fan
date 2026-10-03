@@ -28,7 +28,8 @@ esac
 
 out="$repo/modules/$release"
 mkdir -p "$repo/modules"
-tmp=$(mktemp "$repo/modules/.it87.ko.XXXXXX")
+# modinfo treats a path without the .ko suffix as a module name, so keep the suffix
+tmp=$(mktemp --suffix=.ko "$repo/modules/.it87.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 echo "Building it87 $IT87_COMMIT for $release with gcc-$gcc_major in $image"
 

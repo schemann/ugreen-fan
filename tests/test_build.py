@@ -35,6 +35,10 @@ class BuildScriptTest(unittest.TestCase):
         self.assertRegex(self.text, r"docker run[^\n]*--platform linux/amd64")
         self.assertRegex(self.text, r"arch=\$\(uname -m\)\n\[\[ \$arch == x86_64 \]\] \|\| \{")
 
+    def test_temp_file_keeps_ko_suffix_for_modinfo(self):
+        # modinfo looks up "/path/.it87.ko.AbC123" as a module name and fails
+        self.assertRegex(self.text, r'tmp=\$\(mktemp --suffix=\.ko ')
+
     def test_temp_file_removed_on_failure(self):
         self.assertIn("set -euo pipefail", self.text)
         self.assertIn("trap 'rm -f \"$tmp\"' EXIT", self.text)
