@@ -1,0 +1,55 @@
+# ugreen-fan configuration - preset for UGREEN DXP4800 Pro.
+# Copy to config.toml and adjust. Temperatures in °C, PWM in 0..255.
+
+supported_models = ["DXP4800 Pro"]      # /sys/class/dmi/id/product_name
+module_params = "ignore_resource_conflict=1"
+chip = "it8613"                         # hwmon name of the fan controller (ITE IT8613E at 0xa30)
+interval = 10                           # seconds between control steps (max 10)
+hysteresis = 2                          # fall only after cooling by this much
+min_pwm = 51                            # never go below: the fans must keep spinning
+truenas_alert = true                    # bell alert on problems (see README)
+
+# The Pro has two fans. After boot the BIOS runs both at ~840 RPM (start PWM 51 in
+# auto mode). In manual mode the same duty gives very different speeds (measured):
+#   PWM    60    80   100   120   140   255
+#   fan2 1022  1352  1666  1928  2184  3375 RPM
+#   fan3  508   655   813   942  1068  1646 RPM
+# The per-fan min_pwm keeps both at least at the BIOS idle speed.
+# Without `sources` a fan follows every source.
+[[fans]]
+pwm = 2                                 # pwmN that drives the fan
+fan = 2                                 # fanN_input with its tachometer
+min_pwm = 51                            # ~843 RPM (measured)
+
+[[fans]]
+pwm = 3
+fan = 3
+min_pwm = 105                           # ~851 RPM (measured), the BIOS idle speed
+
+[sources.disks]
+driver = "drivetemp"                    # every SATA drive in the bays; USB disks and NVMe are skipped
+valid = [1, 80]                         # a reading outside this range -> failsafe
+curve = [[42, 60], [46, 100], [48, 128], [50, 170], [55, 255]]
+
+[sources.cpu]
+driver = "it8613"                       # temp1 of the chip is the CPU (PECI)
+channel = 1
+valid = [1, 110]
+curve = [[60, 51], [75, 128], [90, 255]]
+
+# The stacked SO-DIMM slots run hot: under Memtest the RAM went from 59 to 80 °C in
+# 10 minutes and the box froze, twice. That is why the RAM drives the fans directly.
+[sources.ram]
+driver = "spd5118"                      # DDR5 SPD hub sensor, one hwmon per module (1 or 2)
+channel = 1
+valid = [1, 100]
+curve = [[50, 51], [55, 90], [60, 140], [65, 200], [70, 255]]
+
+[sources.nvme]
+driver = "nvme"                         # temp1 = "Composite" of the NVMe drive
+# Measured drive: TWSC TSC3AN128, temp1_crit 94.85 °C. Other drives have other limits:
+# check /sys/class/hwmon/hwmon*/temp1_crit (name "nvme") and adjust the curve.
+channel = 1
+optional = true                         # no NVMe fitted: the source adds nothing
+valid = [1, 100]
+curve = [[50, 51], [60, 100], [70, 180], [75, 255]]
