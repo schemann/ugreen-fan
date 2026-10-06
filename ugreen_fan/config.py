@@ -50,7 +50,7 @@ def load_config(path: Path) -> Config:
         with path.open("rb") as f:
             data = tomllib.load(f)
     except FileNotFoundError:
-        raise ConfigError(f"{path} not found: copy config.example.toml to config.toml") from None
+        raise ConfigError(f"{path} not found: run 'ugreen-fan install' or copy a preset from presets/") from None
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from e
     return parse_config(data)

@@ -136,13 +136,14 @@ class InstallCommandTest(unittest.TestCase):
         text, _ = self.install("DXP4800 Pro")
         self.assertEqual(text, (cli.PRESETS / "dxp4800-pro.toml").read_text())
 
-    def test_dxp4800_gets_the_example(self):
+    def test_dxp4800_gets_its_preset(self):
         text, _ = self.install("DXP4800")
-        self.assertEqual(text, cli.EXAMPLE.read_text())
+        self.assertEqual(text, (cli.PRESETS / "dxp4800.toml").read_text())
 
-    def test_unknown_model_falls_back_to_example_with_warning(self):
+    def test_unknown_model_falls_back_to_dxp4800_with_warning(self):
         text, logs = self.install("DXP8800 Plus")
-        self.assertEqual(text, cli.EXAMPLE.read_text())
+        self.assertEqual(text, cli.FALLBACK.read_text())
+        self.assertEqual(cli.FALLBACK, cli.PRESETS / "dxp4800.toml")
         self.assertTrue(any(line.startswith("WARNING") and "DXP8800 Plus" in line for line in logs))
 
     def test_unreadable_dmi_is_a_clear_error(self):

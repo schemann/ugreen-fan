@@ -1,5 +1,5 @@
 # ugreen-fan configuration - preset for UGREEN DXP4800 Pro.
-# Copy to config.toml and adjust. Temperatures in °C, PWM in 0..255.
+# Copied to config.toml by `ugreen-fan install`; adjust it there. Temperatures in °C, PWM in 0..255.
 
 supported_models = ["DXP4800 Pro"]      # /sys/class/dmi/id/product_name
 module_params = "ignore_resource_conflict=1"

@@ -17,8 +17,8 @@ from .truenas import TrueNASError, clear_alert, raise_alert, register, unregiste
 
 REPO = Path(__file__).resolve().parent.parent
 CONFIG = REPO / "config.toml"
-EXAMPLE = REPO / "config.example.toml"  # the DXP4800 preset, also the fallback
 PRESETS = REPO / "presets"
+FALLBACK = PRESETS / "dxp4800.toml"  # for a model without a preset
 
 log = logging.getLogger("ugreen_fan")
 
@@ -103,10 +103,10 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_install(args: argparse.Namespace) -> int:
     if not CONFIG.exists():
         model = read_model()
-        preset = find_preset(model, [EXAMPLE, *sorted(PRESETS.glob("*.toml"))])
+        preset = find_preset(model, sorted(PRESETS.glob("*.toml")))
         if preset is None:
             log.warning("No preset supports '%s'; check chip, fans and sources in %s", model, CONFIG)
-            preset = EXAMPLE
+            preset = FALLBACK
         shutil.copyfile(preset, CONFIG)
         log.info("Created %s from %s", CONFIG, preset.name)
     config = load_config(CONFIG)

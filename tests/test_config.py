@@ -7,7 +7,7 @@ from pathlib import Path
 from ugreen_fan.config import ConfigError, FanSpec, find_preset, load_config, parse_config
 
 REPO = Path(__file__).resolve().parent.parent
-EXAMPLE = REPO / "config.example.toml"
+EXAMPLE = REPO / "presets" / "dxp4800.toml"
 PRO = REPO / "presets" / "dxp4800-pro.toml"
 
 
@@ -150,7 +150,7 @@ class FansTest(unittest.TestCase):
 
 class PresetTest(unittest.TestCase):
     def presets(self) -> list[Path]:
-        return [EXAMPLE, *sorted((REPO / "presets").glob("*.toml"))]
+        return sorted((REPO / "presets").glob("*.toml"))
 
     def test_every_shipped_preset_parses(self):
         self.assertIn(PRO, self.presets())
@@ -190,7 +190,7 @@ class PresetTest(unittest.TestCase):
 
 class LoadConfigTest(unittest.TestCase):
     def test_missing_file_mentions_example(self):
-        with self.assertRaisesRegex(ConfigError, "config.example.toml"):
+        with self.assertRaisesRegex(ConfigError, "presets/"):
             load_config(Path("/nonexistent/config.toml"))
 
     def test_broken_toml(self):

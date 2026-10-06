@@ -63,10 +63,10 @@ Without an existing `config.toml`, `install` copies the preset whose
 
 | Preset | Model |
 |---|---|
-| `config.example.toml` | DXP4800 |
+| `presets/dxp4800.toml` | DXP4800 |
 | `presets/dxp4800-pro.toml` | DXP4800 Pro |
 
-If no preset matches, it copies `config.example.toml` and logs a warning; check
+If no preset matches, it copies `presets/dxp4800.toml` and logs a warning; check
 `chip`, `[[fans]]` and the sources before relying on it. Edit `config.toml` and run
 `sudo bin/ugreen-fan load` to apply.
 
