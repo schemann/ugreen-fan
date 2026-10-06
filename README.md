@@ -259,8 +259,9 @@ probably work the same way, and you can adapt this yourself:
 
 1. Identify the Super-I/O chip: `sensors-detect`, or read the ID registers at
    ports `0x2E`/`0x4E`. Check that the frankcrawford/it87 fork supports it.
-2. Build and load the module (`sudo ./build.sh`, then
-   `sudo insmod modules/$(uname -r)/it87.ko ignore_resource_conflict=1`).
+2. Build and load the module (`sudo ./build.sh`, then `sudo modprobe hwmon-vid` and
+   `sudo insmod modules/$(uname -r)/it87.ko ignore_resource_conflict=1`; insmod does not
+   load the `hwmon-vid` dependency itself).
 3. Find the fan channels: every `fanN_input` with a non-zero RPM.
 4. Test `pwmN` by hand. **Note the original `pwmN` value first**: on ITE chips the
    manual duty register doubles as the start PWM of the BIOS curve, so to give control
@@ -285,5 +286,6 @@ Python 3.11 standard library only — TrueNAS has no pip.
 ## Credits
 
 - [frankcrawford/it87](https://github.com/frankcrawford/it87) — the driver
+- [schemann](https://github.com/schemann) — DXP4800 Pro preset and multi-fan support
 - [rw-martin/UGREEN-DXP4800-Fan-Curve](https://github.com/rw-martin/UGREEN-DXP4800-Fan-Curve) — BIOS fan curve settings
 - [TrueNAS forum: UGREEN NAS DXP4800 fan control scripts](https://forums.truenas.com/t/ugreen-nas-dxp4800-fan-control-scripts/67587)
