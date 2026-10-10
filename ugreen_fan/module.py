@@ -198,7 +198,8 @@ def _find_bus(adapter: str, root: Path) -> int | None:
     buses = []
     for entry in root.glob("i2c-*"):
         try:
-            if (entry / "name").read_text().strip() == adapter:
+            # the kernel appends the I/O base ("SMBus I801 adapter at efa0"), which varies
+            if (entry / "name").read_text().strip().startswith(adapter):
                 buses.append(int(entry.name.removeprefix("i2c-")))
         except (OSError, ValueError):
             continue

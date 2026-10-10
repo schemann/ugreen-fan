@@ -81,7 +81,7 @@ If no preset matches, it copies `presets/dxp4800.toml` and logs a warning; check
 | `hysteresis` | °C the temperature must drop before the fan slows down |
 | `min_pwm` | lowest PWM ever written, keeps the fans spinning; a fan's own `min_pwm` overrides it |
 | `truenas_alert` | raise a bell alert on problems (see [Alerts](#alerts)) |
-| `[[i2c_devices]]` | optional, one table per i2c sensor the kernel does not register itself: `adapter` (name as in `/sys/bus/i2c/devices/i2c-N/name`), `driver` (e.g. `spd5118`) and `addresses` (list of 7-bit addresses, `0x03`..`0x77`); see [i2c sensors](#i2c-sensors) |
+| `[[i2c_devices]]` | optional, one table per i2c sensor the kernel does not register itself: `adapter` (start of the name in `/sys/bus/i2c/devices/i2c-N/name`, so `SMBus I801 adapter` matches `SMBus I801 adapter at efa0`), `driver` (e.g. `spd5118`) and `addresses` (list of 7-bit addresses, `0x03`..`0x77`); see [i2c sensors](#i2c-sensors) |
 | `[sources.*]` | temperature inputs, each with its own `curve` and `valid` range |
 
 Each source maps its hottest reading through a piecewise-linear `curve` of
@@ -157,7 +157,7 @@ driver = "spd5118"
 addresses = [0x50, 0x51, 0x52, 0x53]
 ```
 
-`load` runs `modprobe` for the driver, finds the adapter by name and, for each address
+`load` runs `modprobe` for the driver, finds the adapter whose name starts with `adapter` and, for each address
 without a device yet, writes `<driver> 0x52` to the adapter's `new_device`. A device
 that has not bound a driver after 1 s is removed again with `delete_device`. A missing
 adapter or a failed write is logged and never stops `load`; a sensor that still does

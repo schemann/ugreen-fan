@@ -35,7 +35,7 @@ class FanSpec:
 
 @dataclass(frozen=True)
 class I2cDevice:
-    adapter: str                # adapter name as in /sys/bus/i2c/devices/i2c-N/name
+    adapter: str                # prefix of /sys/bus/i2c/devices/i2c-N/name
     driver: str                 # kernel driver to modprobe and bind, e.g. "spd5118"
     addresses: tuple[int, ...]  # 7-bit addresses to probe
 

@@ -59,6 +59,6 @@ curve = [[50, 51], [60, 100], [70, 180], [75, 255]]
 # this block there is no spd5118 hwmon after boot, the ram source is missing and the fans
 # sit in failsafe. `load` registers the addresses and removes those where nothing binds.
 [[i2c_devices]]
-adapter = "SMBus I801 adapter"          # /sys/bus/i2c/devices/i2c-N/name
+adapter = "SMBus I801 adapter"          # prefix of /sys/bus/i2c/devices/i2c-N/name ("... at efa0")
 driver = "spd5118"
 addresses = [0x50, 0x51, 0x52, 0x53]

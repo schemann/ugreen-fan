@@ -140,7 +140,7 @@ class ProbeI2cTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.add_bus(0, "SMBus I801 adapter")
+        self.add_bus(0, "SMBus I801 adapter at efa0")  # real name carries the I/O base
         self.writes: list[tuple[str, str]] = []
         self.bind: set[str] = set()      # device names that bind a driver once registered
         self.fail: set[str] = set()      # sysfs files whose write raises OSError
@@ -242,6 +242,11 @@ class ProbeI2cTest(unittest.TestCase):
         self.add_bus(2, "Other adapter")
         self.probe(I2cDevice("Other adapter", "spd5118", (0x50,)))
         self.assertEqual(self.writes[0][0], "i2c-2/new_device")
+
+    def test_adapter_matches_by_name_prefix_not_substring(self):
+        self.add_bus(3, "Synopsys DesignWare SMBus I801 adapter")   # contains, does not start with
+        self.probe(SPD)
+        self.assertTrue(all(path.startswith("i2c-0/") for path, _ in self.writes))
 
     def test_new_device_write_error_is_logged_and_next_address_tried(self):
         self.fail.add("new_device")
