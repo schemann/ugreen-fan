@@ -53,3 +53,12 @@ channel = 1
 optional = true                         # no NVMe fitted: the source adds nothing
 valid = [1, 100]
 curve = [[50, 51], [60, 100], [70, 180], [75, 255]]
+
+# Measured (TrueNAS 25.10.7, kernel 6.12): with one DDR5 module in the second slot that
+# slot answers at 0x52, but the kernel only registers SPD sensors at 0x50 and 0x51. Without
+# this block there is no spd5118 hwmon after boot, the ram source is missing and the fans
+# sit in failsafe. `load` registers the addresses and removes those where nothing binds.
+[[i2c_devices]]
+adapter = "SMBus I801 adapter"          # /sys/bus/i2c/devices/i2c-N/name
+driver = "spd5118"
+addresses = [0x50, 0x51, 0x52, 0x53]

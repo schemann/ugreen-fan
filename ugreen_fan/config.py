@@ -7,6 +7,7 @@ from typing import Any
 
 from .curve import Curve
 
+I2C_MIN, I2C_MAX = 0x03, 0x77  # usable 7-bit i2c addresses (the rest is reserved)
 MAX_INTERVAL = 10  # the systemd watchdog is 30 s; three missed steps kill the service
 
 
@@ -33,6 +34,13 @@ class FanSpec:
 
 
 @dataclass(frozen=True)
+class I2cDevice:
+    adapter: str                # adapter name as in /sys/bus/i2c/devices/i2c-N/name
+    driver: str                 # kernel driver to modprobe and bind, e.g. "spd5118"
+    addresses: tuple[int, ...]  # 7-bit addresses to probe
+
+
+@dataclass(frozen=True)
 class Config:
     supported_models: tuple[str, ...]
     module_params: str
@@ -43,6 +51,7 @@ class Config:
     min_pwm: int
     truenas_alert: bool
     sources: tuple[Source, ...]
+    i2c_devices: tuple[I2cDevice, ...] = ()
 
 
 def load_config(path: Path) -> Config:
@@ -77,6 +86,7 @@ def parse_config(data: dict[str, Any]) -> Config:
             min_pwm=int(data.get("min_pwm", 0)),
             truenas_alert=bool(data.get("truenas_alert", True)),
             sources=sources,
+            i2c_devices=_parse_i2c_devices(data),
         )
     except KeyError as e:
         raise ConfigError(f"missing key {e}") from e
@@ -106,6 +116,27 @@ def _parse_fans(data: dict[str, Any], all_sources: tuple[str, ...]) -> tuple[Fan
         fans.append(FanSpec(int(raw["pwm"]), int(raw["fan"]), tuple(str(n) for n in names),
                             None if min_pwm is None else int(min_pwm)))
     return tuple(fans)
+
+
+def _parse_i2c_devices(data: dict[str, Any]) -> tuple[I2cDevice, ...]:
+    raw_devices = data.get("i2c_devices", [])
+    if not isinstance(raw_devices, list) or not all(isinstance(raw, dict) for raw in raw_devices):
+        raise ConfigError("i2c_devices must be an array of tables: use [[i2c_devices]]")
+    devices = []
+    for raw in raw_devices:
+        for key in ("adapter", "driver"):
+            if not isinstance(raw.get(key), str) or not raw[key]:
+                raise ConfigError(f"i2c_devices: {key} must be a non-empty string")
+        prefix = f"i2c_devices {raw['driver']}"
+        addresses = raw.get("addresses")
+        # bool is an int subclass: true/false is not an address
+        if (not isinstance(addresses, list) or not addresses
+                or not all(isinstance(a, int) and not isinstance(a, bool) for a in addresses)):
+            raise ConfigError(f"{prefix}: addresses must be a non-empty list of integers")
+        if not all(I2C_MIN <= a <= I2C_MAX for a in addresses):
+            raise ConfigError(f"{prefix}: addresses must be within 0x{I2C_MIN:02x}..0x{I2C_MAX:02x}")
+        devices.append(I2cDevice(raw["adapter"], raw["driver"], tuple(addresses)))
+    return tuple(devices)
 
 
 def _parse_source(name: str, raw: dict[str, Any]) -> Source:

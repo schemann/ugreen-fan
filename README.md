@@ -81,6 +81,7 @@ If no preset matches, it copies `presets/dxp4800.toml` and logs a warning; check
 | `hysteresis` | °C the temperature must drop before the fan slows down |
 | `min_pwm` | lowest PWM ever written, keeps the fans spinning; a fan's own `min_pwm` overrides it |
 | `truenas_alert` | raise a bell alert on problems (see [Alerts](#alerts)) |
+| `[[i2c_devices]]` | optional, one table per i2c sensor the kernel does not register itself: `adapter` (name as in `/sys/bus/i2c/devices/i2c-N/name`), `driver` (e.g. `spd5118`) and `addresses` (list of 7-bit addresses, `0x03`..`0x77`); see [i2c sensors](#i2c-sensors) |
 | `[sources.*]` | temperature inputs, each with its own `curve` and `valid` range |
 
 Each source maps its hottest reading through a piecewise-linear `curve` of
@@ -140,6 +141,27 @@ Every hwmon with the driver's name is read, sorted, and each reading is checked
 against `valid`. One instance is labelled `{driver}/temp{channel}` (`it8613/temp1`);
 several, such as one `spd5118` per DDR5 module, are labelled by their device:
 `spd5118@0-0050/temp1`, `spd5118@0-0051/temp1`.
+
+### i2c sensors
+
+The kernel only registers DDR5 SPD sensors at the addresses 0x50 and 0x51, by DMI slot
+order. On a DXP4800 Pro with one module in the second slot (measured: TrueNAS 25.10.7,
+kernel 6.12), that slot answers at 0x52, so after every boot there is no `spd5118`
+hwmon, the `ram` source fails and both fans run in failsafe. The Pro preset therefore
+has an `[[i2c_devices]]` table:
+
+```toml
+[[i2c_devices]]
+adapter = "SMBus I801 adapter"
+driver = "spd5118"
+addresses = [0x50, 0x51, 0x52, 0x53]
+```
+
+`load` runs `modprobe` for the driver, finds the adapter by name and, for each address
+without a device yet, writes `<driver> 0x52` to the adapter's `new_device`. A device
+that has not bound a driver after 1 s is removed again with `delete_device`. A missing
+adapter or a failed write is logged and never stops `load`; a sensor that still does
+not appear is a failsafe for its source and an alert from `check`.
 
 ## Failsafe
 

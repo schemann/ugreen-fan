@@ -4,7 +4,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from ugreen_fan.config import ConfigError, FanSpec, find_preset, load_config, parse_config
+from ugreen_fan.config import ConfigError, FanSpec, I2cDevice, find_preset, load_config, parse_config
 
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLE = REPO / "presets" / "dxp4800.toml"
@@ -148,6 +148,54 @@ class FansTest(unittest.TestCase):
         self.assert_invalid(with_fans({"pwm": "two", "fan": 2}), "invalid value")
 
 
+def with_i2c(*devices: dict) -> dict:
+    data = copy.deepcopy(example())
+    data["i2c_devices"] = list(devices)
+    return data
+
+
+SPD = {"adapter": "SMBus I801 adapter", "driver": "spd5118", "addresses": [0x50, 0x52]}
+
+
+class I2cDevicesTest(unittest.TestCase):
+    def assert_invalid(self, device: dict, message: str):
+        with self.assertRaisesRegex(ConfigError, message):
+            parse_config(with_i2c(device))
+
+    def test_default_is_none(self):
+        self.assertEqual(parse_config(example()).i2c_devices, ())
+
+    def test_parsed(self):
+        config = parse_config(with_i2c(SPD))
+        self.assertEqual(config.i2c_devices, (I2cDevice("SMBus I801 adapter", "spd5118", (0x50, 0x52)),))
+
+    def test_must_be_array_of_tables(self):
+        data = example()
+        data["i2c_devices"] = {"adapter": "x"}
+        with self.assertRaisesRegex(ConfigError, r"\[\[i2c_devices\]\]"):
+            parse_config(data)
+
+    def test_adapter_and_driver_are_strings(self):
+        self.assert_invalid({**SPD, "adapter": 0}, "adapter must be a non-empty string")
+        self.assert_invalid({**SPD, "driver": ""}, "driver must be a non-empty string")
+        self.assert_invalid({k: v for k, v in SPD.items() if k != "driver"}, "driver must be")
+
+    def test_addresses_type(self):
+        for bad in (0x52, [], ["0x52"], [0x52, True], [1.5]):
+            with self.subTest(bad=bad):
+                self.assert_invalid({**SPD, "addresses": bad}, "non-empty list of integers")
+
+    def test_addresses_missing(self):
+        self.assert_invalid({"adapter": "a", "driver": "d"}, "non-empty list of integers")
+
+    def test_address_range(self):
+        for bad in (0x02, 0x78, -1):
+            with self.subTest(bad=bad):
+                self.assert_invalid({**SPD, "addresses": [0x50, bad]}, "within 0x03..0x77")
+        self.assertEqual(parse_config(with_i2c({**SPD, "addresses": [0x03, 0x77]})).i2c_devices[0].addresses,
+                         (0x03, 0x77))
+
+
 class PresetTest(unittest.TestCase):
     def presets(self) -> list[Path]:
         return sorted((REPO / "presets").glob("*.toml"))
@@ -179,6 +227,11 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(ram.curve, ((50, 51), (55, 90), (60, 140), (65, 200), (70, 255)))
         self.assertEqual((nvme.driver, nvme.channel, nvme.valid, nvme.optional), ("nvme", 1, (1.0, 100.0), True))
         self.assertEqual(nvme.curve, ((50, 51), (60, 100), (70, 180), (75, 255)))
+        self.assertEqual(config.i2c_devices,
+                         (I2cDevice("SMBus I801 adapter", "spd5118", (0x50, 0x51, 0x52, 0x53)),))
+
+    def test_dxp4800_preset_has_no_i2c_devices(self):
+        self.assertEqual(load_config(EXAMPLE).i2c_devices, ())
 
     def test_find_preset_by_model(self):
         self.assertEqual(find_preset("DXP4800 Pro", self.presets()), PRO)

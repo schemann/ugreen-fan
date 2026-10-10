@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .config import Config
+from .config import Config, I2cDevice
 from .hwmon import HWMON_ROOT, Fan, SensorError, find_chip, find_hwmon
 
 MODULE = "it87"
@@ -18,7 +18,10 @@ UNIT_NAME = "ugreen-fan.service"
 UNIT_PATH = Path("/run/systemd/system") / UNIT_NAME
 DMI_PRODUCT = Path("/sys/class/dmi/id/product_name")
 PROC_MODULES = Path("/proc/modules")
+I2C_ROOT = Path("/sys/bus/i2c/devices")
 CHIP_TIMEOUT = 5.0
+BIND_POLLS = 10     # x BIND_INTERVAL: wait up to 1 s for a probed device to bind
+BIND_INTERVAL = 0.1
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +190,64 @@ def _wait_for_chip(name: str, root: Path = HWMON_ROOT) -> Path:
     return find_chip(name, root)
 
 
+def _write_sysfs(path: Path, text: str) -> None:
+    path.write_text(text)
+
+
+def _find_bus(adapter: str, root: Path) -> int | None:
+    buses = []
+    for entry in root.glob("i2c-*"):
+        try:
+            if (entry / "name").read_text().strip() == adapter:
+                buses.append(int(entry.name.removeprefix("i2c-")))
+        except (OSError, ValueError):
+            continue
+    return min(buses, default=None)
+
+
+def _wait_for_driver(device: Path) -> bool:
+    for _ in range(BIND_POLLS):
+        if (device / "driver").is_symlink():
+            return True
+        time.sleep(BIND_INTERVAL)
+    return (device / "driver").is_symlink()
+
+
+def probe_i2c(devices: tuple[I2cDevice, ...], root: Path = I2C_ROOT) -> None:
+    """Register i2c sensors the kernel does not find itself (SPD hubs only at 0x50/0x51).
+
+    A device that does not bind is removed again. Nothing here may fail `load`: a missing
+    sensor is already a failsafe for its source and an alert from `check`.
+    """
+    for spec in devices:
+        try:
+            _run("modprobe", spec.driver)
+        except SetupError as e:
+            log.warning("%s", e)
+        bus = _find_bus(spec.adapter, root)
+        if bus is None:
+            log.warning("i2c adapter '%s' not found, skipping %s", spec.adapter, spec.driver)
+            continue
+        for address in spec.addresses:
+            device = root / f"{bus}-{address:04x}"
+            if device.exists():
+                continue
+            try:
+                _write_sysfs(root / f"i2c-{bus}" / "new_device", f"{spec.driver} 0x{address:02x}\n")
+            except OSError as e:
+                log.warning("cannot register %s at 0x%02x on i2c-%d: %s", spec.driver, address, bus, e)
+                continue
+            if _wait_for_driver(device):
+                log.info("Registered %s at 0x%02x on i2c-%d", spec.driver, address, bus)
+                continue
+            try:
+                _write_sysfs(root / f"i2c-{bus}" / "delete_device", f"0x{address:02x}\n")
+            except OSError as e:
+                log.warning("cannot remove %s at 0x%02x on i2c-%d: %s", spec.driver, address, bus, e)
+                continue
+            log.info("No %s at 0x%02x on i2c-%d, removed", spec.driver, address, bus)
+
+
 def load(config: Config, repo: Path, force: bool) -> None:
     model = check_model(config.supported_models, force)
     release = os.uname().release
@@ -196,6 +257,7 @@ def load(config: Config, repo: Path, force: bool) -> None:
     if not is_loaded():
         insert_module(ko, config.module_params)
         log.info("Loaded %s on %s", ko, model)
+    probe_i2c(config.i2c_devices)
     chip = _wait_for_chip(config.chip)
     save_bios_pwm([Fan(chip, spec.pwm, spec.fan) for spec in config.fans], BIOS_PWM_FILE)
     UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
